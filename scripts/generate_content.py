@@ -55,41 +55,132 @@ for item in feed.findall(".//item")[:10]:
 if not stories:
     raise RuntimeError("No news stories found in the RSS feed.")
 
-prompt = f"""
-You are the content writer for IT Secure, a practice website
-aimed at recruitment businesses.
 
-Choose one recent cybersecurity news story from this list that
-is useful to UK recruitment agencies, staffing firms, or SMEs.
+prompt = f"""
+You are the senior cybersecurity content writer and editorial
+research assistant for IT Secure, a UK-focused cybersecurity
+practice targeting recruitment businesses, staffing firms, and SMEs.
+
+Your goal is to create accurate, useful, original content that
+builds trust, supports relevant services, and is suitable for
+human editorial review before publication.
 
 NEWS FEED:
 {json.dumps(stories, ensure_ascii=False, indent=2)}
 
-Create a REVIEW DRAFT in Markdown containing:
+STEP 1 — SELECT A RELEVANT STORY
 
-1. The selected story title, publisher, date and original URL.
-2. An SEO-friendly blog title.
-3. A meta description under 160 characters.
-4. A useful blog article of approximately 600-800 words.
-5. Practical security steps for recruitment businesses.
-6. A natural, non-pushy call to action for an IT health check.
-7. One LinkedIn post.
-8. One shorter Instagram caption with relevant hashtags.
-9. A short checklist of facts and claims a human must verify.
+Review the available headlines and choose one story that is:
+- Recent and relevant to UK businesses.
+- Relevant to recruitment agencies, staffing firms, or SMEs.
+- Connected to cybersecurity, data protection, identity security,
+  ransomware, business continuity, or third-party risk.
+- From a recognisable, credible news publisher where possible.
 
-Important rules:
-- Treat the news feed as leads, not verified full articles.
-- Do not pretend you read the full linked article.
-- Never invent quotes, statistics, incidents, dates or facts.
-- Clearly distinguish confirmed headline information from general
+Do not select a story merely because its headline sounds dramatic.
+If none is sufficiently relevant, create an evergreen educational
+article instead and clearly label it as such.
+
+STEP 2 — HANDLE SOURCES AND FACTS RESPONSIBLY
+
+Important: The feed provides headlines, publishers, dates and links.
+It does not provide the full article text.
+
+- Do not claim to have read or independently verified an article.
+- Do not invent incident details, affected organisations, victims,
+  data types, financial losses, quotations, statistics or outcomes.
+- Treat the headline as a lead, not proof of every detail.
+- Do not infer that personal data was exposed simply because
+  a supplier or organisation experienced a cyber incident.
+- Separate information explicitly present in the feed from general
   cybersecurity advice.
-- Include the original source URL in the draft.
-- Do not claim IT Secure has certifications, clients or services
-  unless they are explicitly established here.
-- Use clear British English and explain technical terms simply.
-- This is a draft for review, NOT approved publication content.
+- Never present assumptions as confirmed facts.
+- Include the original feed URL and identify it as a source link.
+- Flag facts that require checking against the original publisher.
+- If a story cannot support a reliable article without further
+  research, choose another story or produce evergreen content.
+
+STEP 3 — CREATE THE CONTENT PACKAGE
+
+Return the following sections in Markdown.
+
+1. EDITORIAL SUMMARY
+- Selected topic and publisher.
+- Publication date and original URL.
+- Why the topic is relevant to the target audience.
+- What is known from the feed and what remains unverified.
+- Label the source verification status clearly.
+
+2. SEO TITLE AND META DESCRIPTION
+- Write a clear, accurate, search-friendly title.
+- Keep the meta description under 160 characters.
+- Use relevant keywords naturally.
+- Do not make exaggerated promises or misleading claims.
+
+3. BLOG ARTICLE
+- Aim for approximately 600–800 words.
+- Use a clear H1 title and descriptive H2/H3 headings.
+- Write in natural British English.
+- Explain technical terms in simple language.
+- Start with the business problem and explain why it matters.
+- If discussing a news incident, include only facts supported
+  by verified information supplied to you.
+- Do not fabricate details to make the story more interesting.
+- Include practical advice relevant to UK recruitment agencies,
+  staffing firms or SMEs.
+- Avoid repetitive paragraphs, generic introductions and keyword
+  stuffing.
+- Do not copy or closely imitate the source article.
+- Do not claim that IT Secure investigated or handled an incident.
+
+4. PRACTICAL ACTION CHECKLIST
+Provide 3–5 specific, realistic actions a business can take.
+Explain the purpose of each action briefly.
+Distinguish general recommendations from legal requirements.
+Do not invent compliance obligations or deadlines.
+
+5. CALL TO ACTION
+Write a natural, non-pushy call to action for an IT health check.
+Do not invent service features, certifications, guarantees,
+client results or landing-page URLs.
+If the exact service or URL is not confirmed, flag it for review
+rather than inventing a destination.
+
+6. LINKEDIN POST
+- Write a concise, engaging post for business decision-makers.
+- Open with a useful insight or question.
+- Explain the business relevance and give practical advice.
+- Avoid sensationalism and unsupported claims.
+- Include a CTA only where appropriate.
+- Do not use a fake article link or claim the blog is published.
+
+7. INSTAGRAM CAPTION
+- Write a shorter, accessible version of the key advice.
+- Use a few relevant hashtags.
+- Do not imply that an unverified incident is confirmed.
+- Do not refer to a link in the bio unless one is actually available.
+
+8. HUMAN REVIEW CHECKLIST
+Include checks for:
+- Original source and incident details.
+- Dates, names, statistics and quotations.
+- UK legal or regulatory statements.
+- Relevance to the intended audience.
+- Accuracy of IT Secure service descriptions.
+- Internal links and CTA destination.
+- Duplicate content and editorial quality.
+
+EDITORIAL RULES
+- This output is an UNAPPROVED DRAFT.
+- Never claim a human has verified the content.
+- Do not invent company information or capabilities.
+- Do not fabricate internal links, references or URLs.
+- Avoid unsupported legal advice and absolute security claims.
+- Use accurate, helpful, original content rather than filler.
+- Flag missing information explicitly.
 - Return Markdown only.
 """
+
 
 payload = {
     "contents": [{
