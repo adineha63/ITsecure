@@ -96,8 +96,10 @@ payload = {
         "parts": [{"text": prompt}]
     }],
     "generationConfig": {
-        "temperature": 0.4,
-        "maxOutputTokens": 5000
+        "maxOutputTokens": 3000,
+        "thinkingConfig": {
+            "thinkingLevel": "low"
+        }
     }
 }
 
@@ -117,7 +119,7 @@ api_request = urllib.request.Request(
     method="POST"
 )
 
-with urllib.request.urlopen(api_request, timeout=120) as response:
+with urllib.request.urlopen(api_request, timeout=240) as response:
     result = json.loads(response.read().decode("utf-8"))
 
 parts = result.get("candidates", [{}])[0].get(
