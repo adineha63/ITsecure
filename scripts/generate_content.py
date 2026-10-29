@@ -1,13 +1,11 @@
 
 import os
 import json
-import re
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
-from html import unescape
 
 API_KEY = os.environ.get("GEMINI_API_KEY")
 MODEL = "gemini-3.8-flash"
@@ -15,182 +13,135 @@ MODEL = "gemini-3.8-flash"
 if not API_KEY:
     raise RuntimeError("GEMINI_API_KEY secret is missing.")
 
-# Fetch recent cybersecurity news headlines.
-query = urllib.parse.quote("cybersecurity news when:7d")
-feed_url = (
-    "https://news.google.com/rss/search?q="
-    + query
-    + "&hl=en-GB&gl=GB&ceid=GB:en"
-)
+# These topics reflect IT Secure's current practice audience.
+seed_queries = [
+    "cybersecurity for recruitment agencies",
+    "IT support for recruitment agencies",
+    "cybersecurity checklist for small businesses",
+    "Microsoft 365 security for small businesses",
+    "how to prevent phishing attacks at work",
+    "ransomware protection for small businesses",
+    "IT health check for businesses",
+    "data protection for recruitment agencies",
+    "business email security",
+    "backup and disaster recovery for small businesses",
+]
 
-request = urllib.request.Request(
-    feed_url,
-    headers={"User-Agent": "ITSecureContentBot/1.0"}
-)
-
-with urllib.request.urlopen(request, timeout=30) as response:
-    feed = ET.fromstring(response.read())
-
-stories = []
-
-for item in feed.findall(".//item")[:10]:
-    title = item.findtext("title", "").strip()
-    link = item.findtext("link", "").strip()
-    published = item.findtext("pubDate", "").strip()
-    source_element = item.find("source")
-    source = (
-        source_element.text.strip()
-        if source_element is not None and source_element.text
-        else "Source shown in article link"
+def get_suggestions(query):
+    url = (
+        "https://suggestqueries.google.com/complete/search?"
+        + urllib.parse.urlencode({
+            "client": "firefox",
+            "q": query
+        })
     )
 
-    if title and link:
-        stories.append({
-            "title": title,
-            "source": source,
-            "published": published,
-            "url": link
-        })
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0"}
+    )
 
-if not stories:
-    raise RuntimeError("No news stories found in the RSS feed.")
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = json.loads(response.read().decode("utf-8"))
 
+        return data[1] if len(data) > 1 else []
+
+    except Exception as exc:
+        print(f"Suggestion lookup skipped for '{query}': {exc}")
+        return []
+
+suggestions = {}
+
+for query in seed_queries:
+    results = get_suggestions(query)
+    suggestions[query] = results[:8]
+
+print("Search suggestion collection completed.")
+
+research_data = {
+    "seed_queries": seed_queries,
+    "google_suggestions": suggestions,
+    "audience": "UK recruitment agencies and small businesses",
+    "website": "IT Secure",
+    "primary_conversion": "Enquiry for an IT health check",
+}
 
 prompt = f"""
-You are the senior cybersecurity content writer and editorial
-research assistant for IT Secure, a UK-focused cybersecurity
-practice targeting recruitment businesses, staffing firms, and SMEs.
+You are a B2B content strategist specialising in cybersecurity,
+search intent, Google SEO and AI search visibility.
 
-Your goal is to create accurate, useful, original content that
-builds trust, supports relevant services, and is suitable for
-human editorial review before publication.
+Develop a topic opportunity report for IT Secure, a practice
+website aimed at UK recruitment agencies and small businesses.
 
-NEWS FEED:
-{json.dumps(stories, ensure_ascii=False, indent=2)}
+RESEARCH INPUT:
+{json.dumps(research_data, ensure_ascii=False, indent=2)}
 
-STEP 1 — SELECT A RELEVANT STORY
+OBJECTIVE:
+Find useful topics that could attract relevant business visitors,
+answer their questions and encourage suitable enquiries.
 
-Review the available headlines and choose one story that is:
-- Recent and relevant to UK businesses.
-- Relevant to recruitment agencies, staffing firms, or SMEs.
-- Connected to cybersecurity, data protection, identity security,
-  ransomware, business continuity, or third-party risk.
-- From a recognisable, credible news publisher where possible.
+PART 1 — TOPIC OPPORTUNITY REPORT
+Suggest 12 distinct content topics.
 
-Do not select a story merely because its headline sounds dramatic.
-If none is sufficiently relevant, create an evergreen educational
-article instead and clearly label it as such.
+For each topic provide:
+- Proposed title
+- Main search query
+- Search intent: informational, commercial or transactional
+- Audience problem being solved
+- Relevance to recruitment businesses (1-5)
+- Likely enquiry potential (1-5)
+- Differentiation opportunity (1-5)
+- Recommended content format
+- A brief explanation of why it deserves attention
 
-STEP 2 — HANDLE SOURCES AND FACTS RESPONSIBLY
+Use the research inputs as clues, not proof of search volume.
+Do not claim these are the most trending topics.
+Do not invent keyword volumes, ranking difficulty or competitor data.
+Make clear that scores are strategic estimates, not measured metrics.
 
-Important: The feed provides headlines, publishers, dates and links.
-It does not provide the full article text.
+PART 2 — PRIORITISATION
+Select the three strongest topics for IT Secure.
+Explain their trade-offs and identify the best first article.
+Prioritise business relevance and enquiry potential over broad traffic.
 
-- Do not claim to have read or independently verified an article.
-- Do not invent incident details, affected organisations, victims,
-  data types, financial losses, quotations, statistics or outcomes.
-- Treat the headline as a lead, not proof of every detail.
-- Do not infer that personal data was exposed simply because
-  a supplier or organisation experienced a cyber incident.
-- Separate information explicitly present in the feed from general
-  cybersecurity advice.
-- Never present assumptions as confirmed facts.
-- Include the original feed URL and identify it as a source link.
-- Flag facts that require checking against the original publisher.
-- If a story cannot support a reliable article without further
-  research, choose another story or produce evergreen content.
+PART 3 — FIRST ARTICLE DRAFT
+Write a useful article of approximately 600-800 words on the
+selected topic.
 
-STEP 3 — CREATE THE CONTENT PACKAGE
+Include:
+- SEO title
+- Meta description under 160 characters
+- Clear introduction answering the reader's main question
+- Descriptive headings and practical steps
+- A concise answer section suitable for readers and AI search
+- FAQs based on genuine reader needs
+- A natural call to action for an IT health check
+- Suggested internal links to relevant IT Secure pages
+- Claims or details that need human verification
 
-Return the following sections in Markdown.
+PART 4 — SOCIAL CONTENT
+Create one LinkedIn post and one Instagram caption based on
+the article.
 
-1. EDITORIAL SUMMARY
-- Selected topic and publisher.
-- Publication date and original URL.
-- Why the topic is relevant to the target audience.
-- What is known from the feed and what remains unverified.
-- Label the source verification status clearly.
-
-2. SEO TITLE AND META DESCRIPTION
-- Write a clear, accurate, search-friendly title.
-- Keep the meta description under 160 characters.
-- Use relevant keywords naturally.
-- Do not make exaggerated promises or misleading claims.
-
-3. BLOG ARTICLE
-- Aim for approximately 600–800 words.
-- Use a clear H1 title and descriptive H2/H3 headings.
-- Write in natural British English.
-- Explain technical terms in simple language.
-- Start with the business problem and explain why it matters.
-- If discussing a news incident, include only facts supported
-  by verified information supplied to you.
-- Do not fabricate details to make the story more interesting.
-- Include practical advice relevant to UK recruitment agencies,
-  staffing firms or SMEs.
-- Avoid repetitive paragraphs, generic introductions and keyword
-  stuffing.
-- Do not copy or closely imitate the source article.
-- Do not claim that IT Secure investigated or handled an incident.
-
-4. PRACTICAL ACTION CHECKLIST
-Provide 3–5 specific, realistic actions a business can take.
-Explain the purpose of each action briefly.
-Distinguish general recommendations from legal requirements.
-Do not invent compliance obligations or deadlines.
-
-5. CALL TO ACTION
-Write a natural, non-pushy call to action for an IT health check.
-Do not invent service features, certifications, guarantees,
-client results or landing-page URLs.
-If the exact service or URL is not confirmed, flag it for review
-rather than inventing a destination.
-
-6. LINKEDIN POST
-- Write a concise, engaging post for business decision-makers.
-- Open with a useful insight or question.
-- Explain the business relevance and give practical advice.
-- Avoid sensationalism and unsupported claims.
-- Include a CTA only where appropriate.
-- Do not use a fake article link or claim the blog is published.
-
-7. INSTAGRAM CAPTION
-- Write a shorter, accessible version of the key advice.
-- Use a few relevant hashtags.
-- Do not imply that an unverified incident is confirmed.
-- Do not refer to a link in the bio unless one is actually available.
-
-8. HUMAN REVIEW CHECKLIST
-Include checks for:
-- Original source and incident details.
-- Dates, names, statistics and quotations.
-- UK legal or regulatory statements.
-- Relevance to the intended audience.
-- Accuracy of IT Secure service descriptions.
-- Internal links and CTA destination.
-- Duplicate content and editorial quality.
-
-EDITORIAL RULES
-- This output is an UNAPPROVED DRAFT.
-- Never claim a human has verified the content.
-- Do not invent company information or capabilities.
-- Do not fabricate internal links, references or URLs.
-- Avoid unsupported legal advice and absolute security claims.
-- Use accurate, helpful, original content rather than filler.
-- Flag missing information explicitly.
+RULES:
+- Use clear British English.
+- Avoid keyword stuffing and generic filler.
+- Do not fabricate statistics, customer stories, certifications,
+  services or claims about IT Secure.
+- Do not claim guaranteed Google rankings or AI citations.
+- Do not imply the search suggestions provide search-volume data.
+- Clearly label the output as a draft requiring review.
 - Return Markdown only.
 """
-
 
 payload = {
     "contents": [{
         "parts": [{"text": prompt}]
     }],
     "generationConfig": {
-        "maxOutputTokens": 3000,
-        "thinkingConfig": {
-            "thinkingLevel": "low"
-        }
+        "temperature": 0.3,
+        "maxOutputTokens": 7000
     }
 }
 
@@ -200,7 +151,7 @@ api_url = (
     + ":generateContent"
 )
 
-api_request = urllib.request.Request(
+request = urllib.request.Request(
     api_url,
     data=json.dumps(payload).encode("utf-8"),
     headers={
@@ -210,8 +161,15 @@ api_request = urllib.request.Request(
     method="POST"
 )
 
-with urllib.request.urlopen(api_request, timeout=240) as response:
-    result = json.loads(response.read().decode("utf-8"))
+try:
+    with urllib.request.urlopen(request, timeout=180) as response:
+        result = json.loads(response.read().decode("utf-8"))
+
+except urllib.error.HTTPError as exc:
+    details = exc.read().decode("utf-8", errors="replace")
+    raise RuntimeError(
+        f"Gemini API returned HTTP {exc.code}: {details}"
+    ) from exc
 
 parts = result.get("candidates", [{}])[0].get(
     "content", {}
@@ -223,23 +181,26 @@ draft = "\n".join(
 
 if not draft:
     raise RuntimeError(
-        "Gemini returned no draft. Check the API response and model access."
+        "Gemini returned no text. Check the API response, "
+        "model availability and usage limits."
     )
 
 output_dir = Path("output")
 output_dir.mkdir(exist_ok=True)
 
 today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-output_file = output_dir / f"content-draft-{today}.md"
+output_file = output_dir / f"topic-research-{today}.md"
 
 output_file.write_text(
-    "# IT Secure — Content Draft\n\n"
+    "# IT Secure — Topic Research and Content Draft\n\n"
     f"Generated: {today} (UTC)\n\n"
     "**Status: DRAFT — verify before publishing.**\n\n"
+    "Note: Google suggestions are not search-volume or trend data. "
+    "Topic scores are AI-generated estimates.\n\n"
     + draft
     + "\n",
     encoding="utf-8"
 )
 
-print(f"Draft created: {output_file}")
-print(f"News stories considered: {len(stories)}")
+print(f"Research report and article draft saved to {output_file}")
+print("Review the report before publishing any content.")
