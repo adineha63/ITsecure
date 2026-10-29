@@ -2,6 +2,7 @@
 import os
 import json
 import re
+import time
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -9,28 +10,38 @@ from datetime import datetime, timezone
 from pathlib import Path
 from html.parser import HTMLParser
 
+# ==================================================
+# IT SECURE CONTENT AUTOMATION
+# Reads website pages, researches topic ideas,
+# generates a blog and social posts, checks links,
+# and saves a Markdown draft for human review.
+# ==================================================
+
 API_KEY = os.environ.get("GEMINI_API_KEY")
-MODEL = "gemini-3.8-flash"
+MODEL = "gemini-2.5-flash"
 
 if not API_KEY:
     raise RuntimeError(
-        "GEMINI_API_KEY is missing. Check your GitHub Actions secret."
+        "GEMINI_API_KEY is missing. Check GitHub repository "
+        "Settings > Secrets and variables > Actions."
     )
 
 
-# --------------------------------------------------
-# 1. Read the real website pages from the repository
-# --------------------------------------------------
+# ==================================================
+# 1. READ EXISTING WEBSITE HTML FILES
+# ==================================================
 
 class PageParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.title_text = ""
         self.in_title = False
+        self.in_ignored_tag = False
+        self.in_heading = False
         self.headings = []
-        self.links = []
         self.text_parts = []
-        self.in_script_or_style = False
+        self.links = []
+        self.current_heading_text = ""
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
@@ -38,11 +49,12 @@ class PageParser(HTMLParser):
         if tag == "title":
             self.in_title = True
 
-        if tag in ("script", "style"):
-            self.in_script_or_style = True
+        if tag in ("script", "style", "noscript"):
+            self.in_ignored_tag = True
 
         if tag in ("h1", "h2", "h3"):
-            self.current_heading = tag
+            self.in_heading = True
+            self.current_heading_text = ""
 
         if tag == "a" and attrs.get("href"):
             self.links.append(attrs["href"])
@@ -51,11 +63,15 @@ class PageParser(HTMLParser):
         if tag == "title":
             self.in_title = False
 
-        if tag in ("script", "style"):
-            self.in_script_or_style = False
+        if tag in ("script", "style", "noscript"):
+            self.in_ignored_tag = False
 
-        if tag in ("h1", "h2", "h3"):
-            self.current_heading = None
+        if tag in ("h1", "h2", "h3") and self.in_heading:
+            heading = self.current_heading_text.strip()
+            if heading:
+                self.headings.append(heading)
+            self.in_heading = False
+            self.current_heading_text = ""
 
     def handle_data(self, data):
         text = " ".join(data.split())
@@ -65,11 +81,11 @@ class PageParser(HTMLParser):
         if self.in_title:
             self.title_text += " " + text
 
-        if not self.in_script_or_style:
+        if not self.in_ignored_tag:
             self.text_parts.append(text)
 
-            if getattr(self, "current_heading", None):
-                self.headings.append(text)
+            if self.in_heading:
+                self.current_heading_text += " " + text
 
 
 def route_for_file(file_path):
@@ -87,40 +103,58 @@ def route_for_file(file_path):
 pages = []
 existing_routes = set()
 
+ignored_directories = {
+    ".git",
+    "node_modules",
+    "venv",
+    ".venv",
+    "__pycache__",
+}
+
 for html_file in Path(".").rglob("*.html"):
-    if any(
-        part in {".git", "node_modules", "venv"}
-        for part in html_file.parts
-    ):
+    if any(part in ignored_directories for part in html_file.parts):
         continue
 
     route = route_for_file(html_file)
-    existing_routes.add(route)
-
-    parser = PageParser()
-    parser.current_heading = None
 
     try:
-        parser.feed(html_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
+        html = html_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        print(f"Skipping unreadable file {html_file}: {error}")
         continue
+
+    parser = PageParser()
+
+    try:
+        parser.feed(html)
+    except Exception as error:
+        print(f"Could not fully parse {html_file}: {error}")
+
+    existing_routes.add(route)
 
     pages.append({
         "file": html_file.as_posix(),
         "route": route,
         "title": parser.title_text.strip(),
-        "headings": parser.headings[:30],
-        "content": " ".join(parser.text_parts)[:4500],
-        "links": parser.links[:80],
+        "headings": parser.headings[:25],
+        "content": " ".join(parser.text_parts)[:1800],
+        "links": parser.links[:50],
     })
 
 if not pages:
-    raise RuntimeError("No HTML website pages were found.")
+    raise RuntimeError(
+        "No HTML pages found. Check that the workflow is running "
+        "in the root of your website repository."
+    )
+
+print(f"Website pages inspected: {len(pages)}")
+for page in pages:
+    print(f"  {page['route']} — {page['title'] or page['file']}")
 
 
-# --------------------------------------------------
-# 2. Collect Google autocomplete suggestions
-# --------------------------------------------------
+# ==================================================
+# 2. COLLECT GOOGLE AUTOCOMPLETE SUGGESTIONS
+# ==================================================
 
 seed_queries = [
     "IT health check for recruitment agencies",
@@ -146,26 +180,39 @@ for seed in seed_queries:
 
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "Mozilla/5.0"}
+        headers={"User-Agent": "Mozilla/5.0"},
     )
 
-    try:
-        with urllib.request.urlopen(request, timeout=12) as response:
-            result = json.loads(response.read().decode("utf-8"))
+    for attempt in range(1, 3):
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                result = json.loads(
+                    response.read().decode("utf-8")
+                )
 
-        for suggestion in result[1]:
-            suggestions.append({
-                "seed": seed,
-                "suggestion": suggestion
-            })
+            for suggestion in result[1]:
+                suggestions.append({
+                    "seed": seed,
+                    "suggestion": suggestion,
+                })
 
-    except Exception as error:
-        print(f"Autocomplete unavailable for '{seed}': {error}")
+            break
+
+        except Exception as error:
+            print(
+                f"Autocomplete attempt {attempt}/2 failed "
+                f"for '{seed}': {error}"
+            )
+
+            if attempt == 1:
+                time.sleep(2)
+
+print(f"Autocomplete suggestions collected: {len(suggestions)}")
 
 
-# --------------------------------------------------
-# 3. Ask Gemini to create relevant content
-# --------------------------------------------------
+# ==================================================
+# 3. BUILD THE CONTENT BRIEF
+# ==================================================
 
 website_summary = json.dumps(
     [
@@ -174,7 +221,6 @@ website_summary = json.dumps(
             "title": page["title"],
             "headings": page["headings"],
             "content": page["content"],
-            "links": page["links"],
         }
         for page in pages
     ],
@@ -185,9 +231,9 @@ website_summary = json.dumps(
 prompt = f"""
 You are the content strategist and writer for IT Secure.
 
-WEBSITE AND AUDIENCE
+ABOUT THE BUSINESS
 IT Secure is a practice website aimed at UK recruitment businesses.
-Its homepage promotes a free IT Health Check.
+The homepage promotes a free IT Health Check.
 
 The homepage describes these service areas:
 - Managed IT Support
@@ -195,100 +241,127 @@ The homepage describes these service areas:
 - Backup & Disaster Recovery
 - Cloud Solutions
 
-The audience includes recruitment business owners and managers.
-They care about protecting candidate and client information,
+The target audience includes recruitment business owners and managers.
+Their likely concerns include protecting candidate and client information,
 keeping staff working, cybersecurity, backups and recovery.
 
-REAL WEBSITE INVENTORY
+EXISTING WEBSITE PAGES
 The following information was extracted from actual HTML files
-in the website repository. Use it as the source of truth.
+in the website repository. Use it as your source of truth.
 
 {website_summary}
 
 GOOGLE AUTOCOMPLETE SUGGESTIONS
-These are topic ideas, not verified search-volume or conversion data.
+These are possible topic ideas. They are NOT verified search-volume,
+ranking or conversion data.
 
 {json.dumps(suggestions, ensure_ascii=False, indent=2)}
 
 YOUR TASK
 
-Create a Markdown review draft with these sections:
+Create one Markdown report with the following sections.
 
-1. CONTENT OPPORTUNITY REPORT
-- Recommend 12 relevant article topics.
-- Give each a qualitative priority: High, Medium or Low.
-- Explain the intended reader and business relevance.
-- Label the priority as an estimate, not measured search data.
-- Prefer topics that may attract people with a real IT problem
-  and lead naturally to the free IT Health Check.
-- Avoid generic cybersecurity news and unrelated trending topics.
+## 1. Content Opportunity Report
+Recommend 12 relevant article topics.
 
-2. RECOMMENDED ARTICLE
-Choose the strongest topic and explain briefly why it fits
-the website and audience.
+For each topic include:
+- Suggested article title
+- Intended reader
+- Question or problem it addresses
+- Business relevance
+- Qualitative priority: High, Medium or Low
 
-3. SEO AND AI SEARCH BRIEF
-Include a suggested title, meta description under 160 characters,
-main question, related questions, and a concise answer suitable
-for a search result or AI-generated answer.
+Label all priorities as estimates. Do not invent search volumes
+or claim that a topic will rank or convert.
 
-4. BLOG ARTICLE
+Prioritise topics that could help recruitment businesses understand
+IT risks and naturally discover the free IT Health Check.
+
+Avoid generic news and topics unrelated to IT Secure.
+
+## 2. Recommended Article
+Choose the strongest topic and explain why it fits the audience
+and the business.
+
+## 3. SEO and AI Search Brief
+Include:
+- SEO title
+- Meta description under 160 characters
+- Main search question
+- Related questions
+- A concise, direct answer to the main question
+
+Do not promise ranking or AI search inclusion.
+
+## 4. Blog Article
 Write approximately 600–800 words in clear British English.
-Use helpful headings and practical, understandable advice.
-Do not keyword-stuff or repeat the same point unnecessarily.
-Do not pretend to have performed research that was not provided.
 
-5. INTERNAL LINKS
-Suggest relevant internal links using ONLY routes present in
-the REAL WEBSITE INVENTORY above.
-Use the exact route from the inventory.
-Do not invent service pages, case studies, contact pages or URLs.
-If there is no relevant page, say "No suitable existing page".
+Use helpful headings, specific practical advice and natural wording.
+Avoid keyword stuffing, repetitive paragraphs and empty marketing claims.
 
-6. CALL TO ACTION
+Do not pretend to have conducted research that was not provided.
+
+## 5. Internal Links
+Suggest relevant internal links using ONLY these existing routes:
+
+{json.dumps(sorted(existing_routes), ensure_ascii=False)}
+
+Use the exact route shown. Never invent a page or URL.
+If no relevant page exists, say "No suitable existing page".
+
+## 6. Call to Action
 Include a natural invitation to take the free IT Health Check.
-Do not claim that the check includes particular tests, delivers
-a report, takes a specific amount of time or guarantees results
-unless the website inventory explicitly confirms it.
 
-7. LINKEDIN POST
+Do not claim the assessment includes specific tests, delivers a report,
+takes a specific amount of time, or guarantees results unless confirmed
+by the supplied website content.
+
+## 7. LinkedIn Post
 Write one useful, professional post based on the article.
 
-8. INSTAGRAM CAPTION
+## 8. Instagram Caption
 Write a shorter caption with a few relevant hashtags.
 
-9. CLAIMS TO VERIFY BEFORE PUBLISHING
-List claims requiring human verification, including statistics,
-legal or compliance statements, technical promises, guarantees,
-specific service capabilities and unsupported business claims.
-Do not present an unverified claim as established fact.
+## 9. Claims to Verify Before Publishing
+List statistics, legal or compliance statements, technical promises,
+guarantees, service capabilities and business claims requiring review.
 
-10. FINAL REVIEW CHECKLIST
-Check audience relevance, factual caution, clarity, CTA,
-internal-link accuracy and whether the content duplicates
-existing website information.
+Do not present unsupported claims as facts.
+
+## 10. Final Review Checklist
+Check audience relevance, factual caution, clarity, CTA, internal links
+and whether the content duplicates existing website information.
 
 IMPORTANT RULES
-- Do not invent customers, testimonials, certifications,
-  awards, statistics, prices or service guarantees.
-- Do not say IT Secure provides a service unless supported
-  by the website inventory or the explicit service list above.
+- Do not invent customers, testimonials, certifications, awards,
+  statistics, prices or service guarantees.
+- Do not claim IT Secure provides a service unless supported by
+  the supplied website content or the service list above.
 - Do not treat autocomplete suggestions as proof of search volume.
-- Do not claim a topic will rank or convert.
-- Explain uncertainty instead of making unsupported promises.
-- Do not make legal advice sound definitive.
+- Do not give definitive legal advice.
+- Do not invent internal routes.
+- Clearly flag uncertainty.
 - This is a draft for human review, NOT approved publication content.
 - Return Markdown only.
 """
 
+
+# ==================================================
+# 4. CALL GEMINI WITH TIMEOUTS AND RETRIES
+# ==================================================
+
 payload = {
-    "contents": [{
-        "parts": [{"text": prompt}]
-    }],
+    "contents": [
+        {
+            "parts": [
+                {"text": prompt}
+            ]
+        }
+    ],
     "generationConfig": {
         "temperature": 0.3,
-        "maxOutputTokens": 7000
-    }
+        "maxOutputTokens": 5000,
+    },
 }
 
 api_url = (
@@ -297,52 +370,106 @@ api_url = (
     + ":generateContent"
 )
 
-api_request = urllib.request.Request(
-    api_url,
-    data=json.dumps(payload).encode("utf-8"),
-    headers={
-        "Content-Type": "application/json",
-        "x-goog-api-key": API_KEY,
-    },
-    method="POST",
-)
+result = None
 
-try:
-    with urllib.request.urlopen(api_request, timeout=120) as response:
-        result = json.loads(response.read().decode("utf-8"))
+for attempt in range(1, 4):
+    api_request = urllib.request.Request(
+        api_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": API_KEY,
+        },
+        method="POST",
+    )
 
-except urllib.error.HTTPError as error:
-    details = error.read().decode("utf-8", errors="replace")
+    try:
+        print(
+            f"Calling Gemini model {MODEL} "
+            f"(attempt {attempt}/3)..."
+        )
+
+        with urllib.request.urlopen(
+            api_request,
+            timeout=240,
+        ) as response:
+            result = json.loads(
+                response.read().decode("utf-8")
+            )
+
+        break
+
+    except urllib.error.HTTPError as error:
+        details = error.read().decode(
+            "utf-8", errors="replace"
+        )
+
+        if (
+            error.code in (429, 500, 502, 503, 504)
+            and attempt < 3
+        ):
+            print(
+                f"Gemini returned HTTP {error.code}. "
+                "Retrying in 15 seconds..."
+            )
+            time.sleep(15)
+            continue
+
+        raise RuntimeError(
+            f"Gemini API returned HTTP {error.code}: {details}"
+        ) from error
+
+    except (TimeoutError, urllib.error.URLError) as error:
+        if attempt == 3:
+            raise RuntimeError(
+                "Gemini did not respond after 3 attempts. "
+                "Try running the workflow again later. "
+                f"Last error: {error}"
+            ) from error
+
+        print(
+            "Gemini timed out or had a connection problem. "
+            "Retrying in 15 seconds..."
+        )
+        time.sleep(15)
+
+if result is None:
+    raise RuntimeError("Gemini did not return a response.")
+
+if "candidates" not in result or not result["candidates"]:
     raise RuntimeError(
-        f"Gemini API returned HTTP {error.code}: {details}"
-    ) from error
+        "Gemini returned no content candidates. Response: "
+        + json.dumps(result, ensure_ascii=False)[:2000]
+    )
 
-
-parts = result.get("candidates", [{}])[0].get(
+parts = result["candidates"][0].get(
     "content", {}
 ).get("parts", [])
 
 draft = "\n".join(
-    part["text"] for part in parts if "text" in part
+    part["text"]
+    for part in parts
+    if "text" in part
 ).strip()
 
 if not draft:
     raise RuntimeError(
-        "Gemini returned no draft. Check the API response and model access."
+        "Gemini returned an empty draft. Check the API response."
     )
 
 
-# --------------------------------------------------
-# 4. Check generated internal links against real pages
-# --------------------------------------------------
+# ==================================================
+# 5. CHECK MARKDOWN INTERNAL LINKS
+# ==================================================
 
 markdown_links = re.findall(
     r"\]\((/[^)\s#?]*)(?:[?#][^)]*)?\)",
-    draft
+    draft,
 )
 
 invalid_routes = sorted({
-    route for route in markdown_links
+    route
+    for route in markdown_links
     if route not in existing_routes
 })
 
@@ -354,34 +481,40 @@ validation_report = [
 
 for page in pages:
     validation_report.append(
-        f"\n- `{page['route']}` — {page['title'] or page['file']}"
+        f"\n- `{page['route']}` — "
+        f"{page['title'] or page['file']}"
     )
 
 validation_report.append("\n\n### Internal link validation")
 
 if invalid_routes:
     validation_report.append(
-        "\nThe following generated internal routes did not match "
-        "the repository's HTML page routes:"
+        "\nThese generated root-relative Markdown links did not match "
+        "the HTML routes found in the repository:"
     )
+
     for route in invalid_routes:
         validation_report.append(f"\n- `{route}`")
+
     validation_report.append(
-        "\n\nReview these links and remove or correct them before publishing."
+        "\n\nReview and correct these links before publishing."
     )
 else:
     validation_report.append(
-        "\nAll detected root-relative Markdown links matched an HTML "
-        "route in the repository. This does not verify external links "
-        "or every possible link format."
+        "\nAll detected root-relative Markdown links matched "
+        "an HTML route found in the repository."
     )
 
 validation_report.append(
-    "\n\n**Important:** These checks verify local HTML routes and "
-    "content consistency only. They do not independently verify "
-    "facts, legal claims, live website availability, search volume "
-    "or ranking potential."
+    "\n\n**Limitations:** These checks do not verify factual accuracy, "
+    "legal claims, external links, search volume, rankings, or whether "
+    "the live website serves every route correctly."
 )
+
+
+# ==================================================
+# 6. SAVE THE REPORT
+# ==================================================
 
 output_dir = Path("output")
 output_dir.mkdir(exist_ok=True)
@@ -392,7 +525,7 @@ output_file = output_dir / f"content-draft-{today}.md"
 output_file.write_text(
     "# IT Secure — Content Opportunity Report and Draft\n\n"
     f"Generated: {today} (UTC)\n\n"
-    "**Status: DRAFT — verify before publishing.**\n\n"
+    "**Status: DRAFT — review before publishing.**\n\n"
     + draft
     + "\n"
     + "\n".join(validation_report)
@@ -400,7 +533,7 @@ output_file.write_text(
     encoding="utf-8",
 )
 
-print(f"Draft created: {output_file}")
+print(f"Draft created successfully: {output_file}")
 print(f"HTML pages inspected: {len(pages)}")
 print(f"Autocomplete suggestions collected: {len(suggestions)}")
 print(f"Invalid internal routes flagged: {len(invalid_routes)}")
